@@ -4,7 +4,6 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
-const axios = require('axios'); // Add axios for HTTP requests
 
 const app = express();
 const PORT = 3001;
@@ -123,83 +122,6 @@ function generateJWT(payload) {
     
     return `${header}.${payloadBase64}.${signature}`;
 }
-
-// Routes
-
-// Health check endpoint
-app.get('/api/health', (req, res) => {
-    res.json({
-        success: true,
-        message: 'Backend server is running',
-        timestamp: new Date().toISOString(),
-        version: '1.0.0'
-    });
-});
-
-// OnlyOffice healthcheck proxy endpoint
-app.get('/api/onlyoffice/healthcheck', async (req, res) => {
-    try {
-        console.log('Checking OnlyOffice server health...');
-        const response = await axios.get(`${DOCUMENT_SERVER_URL}/healthcheck`, {
-            timeout: 5000,
-            headers: {
-                'User-Agent': 'OnlyOffice-Proxy/1.0'
-            }
-        });
-        
-        console.log('OnlyOffice health check response:', response.status, response.data);
-        
-        res.json({
-            success: true,
-            status: 'connected',
-            data: response.data,
-            server: DOCUMENT_SERVER_URL
-        });
-    } catch (error) {
-        console.error('OnlyOffice health check failed:', error.message);
-        
-        let errorMessage = 'OnlyOffice Document Server tidak dapat diakses';
-        if (error.code === 'ECONNREFUSED') {
-            errorMessage = 'OnlyOffice Document Server tidak berjalan atau tidak dapat dijangkau';
-        } else if (error.code === 'ETIMEDOUT') {
-            errorMessage = 'Timeout saat mengakses OnlyOffice Document Server';
-        }
-        
-        res.status(503).json({
-            success: false,
-            status: 'error',
-            error: errorMessage,
-            details: error.message,
-            server: DOCUMENT_SERVER_URL
-        });
-    }
-});
-
-// OnlyOffice info endpoint
-app.get('/api/onlyoffice/info', async (req, res) => {
-    try {
-        const response = await axios.get(`${DOCUMENT_SERVER_URL}/`, {
-            timeout: 5000,
-            headers: {
-                'User-Agent': 'OnlyOffice-Proxy/1.0'
-            }
-        });
-        
-        res.json({
-            success: true,
-            server: DOCUMENT_SERVER_URL,
-            status: response.status,
-            headers: response.headers
-        });
-    } catch (error) {
-        console.error('OnlyOffice info failed:', error.message);
-        res.status(503).json({
-            success: false,
-            error: 'Gagal mendapatkan info OnlyOffice server',
-            details: error.message
-        });
-    }
-});
 
 // Upload file
 app.post('/api/upload', upload.single('document'), (req, res) => {

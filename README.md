@@ -26,11 +26,16 @@ Server akan berjalan di `http://localhost:3001`
 
 ## Endpoints
 
-- `GET /api/health` - Health check endpoint
-- `GET /api/onlyoffice/healthcheck` - OnlyOffice server health check
+### File Management
+
 - `POST /api/upload` - Upload dokumen
 - `GET /api/files` - Daftar file yang diupload
-- `GET /api/config/:id` - Konfigurasi OnlyOffice untuk dokumen
+- `DELETE /api/file/:id` - Hapus file
+
+### OnlyOffice Integration
+
+- `GET /api/file/:id` - Konfigurasi OnlyOffice untuk dokumen
+- `POST /api/callback/:id` - Callback untuk menyimpan perubahan dari OnlyOffice
 
 ## Environment
 
