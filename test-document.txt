@@ -1,0 +1,11 @@
+Ini adalah dokumen test untuk OnlyOffice Document Manager.
+
+Fitur yang ditest:
+1. Upload dokumen
+2. View dokumen
+3. Edit dokumen
+4. Download dokumen
+5. Delete dokumen
+
+Status: Test document berhasil dibuat
+Timestamp: 2025-06-17 
