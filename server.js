@@ -4,6 +4,7 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const axios = require('axios');
 
 const app = express();
 const PORT = 3001;
@@ -13,6 +14,10 @@ const ONLYOFFICE_JWT_SECRET = 'secret';
 const requestCache = new Map();
 const RATE_LIMIT_WINDOW = 1000; // 1 second
 const MAX_REQUESTS_PER_WINDOW = 5;
+
+// File monitoring storage
+const fileMonitors = new Map(); // fileId -> { timeout, lastModified, isMonitoring }
+let versionCounter = 1;
 
 // CORS configuration
 const corsOptions = {
@@ -294,6 +299,9 @@ app.delete('/api/file/:id', (req, res) => {
     
     console.log('Deleting file:', fileId);
     
+    // Stop monitoring before deleting
+    stopFileMonitoring(fileId);
+    
     if (fs.existsSync(filePath)) {
         fs.unlinkSync(filePath);
         // Clear cache when file is deleted
@@ -304,6 +312,220 @@ app.delete('/api/file/:id', (req, res) => {
         res.status(404).json({ error: 'File not found' });
     }
 });
+
+// Save changes API endpoint
+app.post('/api/save-changes', async (req, res) => {
+    const { fileId, fileName, documentKey } = req.body;
+    
+    console.log('Save changes request received:', { fileId, fileName, documentKey });
+    
+    if (!fileId) {
+        return res.status(400).json({ error: 'File ID is required' });
+    }
+    
+    const filePath = path.join(uploadsDir, fileId);
+    
+    if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ error: 'File not found' });
+    }
+    
+    try {
+        // Start monitoring this file for changes
+        startFileMonitoring(fileId, filePath);
+        
+        // Return success immediately
+        res.json({ 
+            success: true, 
+            message: 'Save changes initiated successfully',
+            fileId: fileId
+        });
+        
+        console.log('Save changes response sent, monitoring started for:', fileId);
+    } catch (error) {
+        console.error('Error initiating save changes:', error);
+        res.status(500).json({ error: 'Failed to initiate save changes' });
+    }
+});
+
+// Function to start monitoring file changes
+function startFileMonitoring(fileId, filePath) {
+    // Stop existing monitoring if any
+    if (fileMonitors.has(fileId)) {
+        const monitor = fileMonitors.get(fileId);
+        if (monitor.timeout) {
+            clearTimeout(monitor.timeout);
+        }
+    }
+    
+    const stats = fs.statSync(filePath);
+    const monitor = {
+        timeout: null,
+        lastModified: stats.mtime.getTime(),
+        isMonitoring: true,
+        filePath: filePath
+    };
+    
+    fileMonitors.set(fileId, monitor);
+    
+    console.log(`Started monitoring file: ${fileId}`);
+    
+    // Start the monitoring loop
+    monitorFileChanges(fileId);
+}
+
+// Function to monitor file changes every 0.5 seconds
+function monitorFileChanges(fileId) {
+    const monitor = fileMonitors.get(fileId);
+    if (!monitor || !monitor.isMonitoring) {
+        return;
+    }
+    
+    try {
+        if (!fs.existsSync(monitor.filePath)) {
+            console.log(`File ${fileId} no longer exists, stopping monitoring`);
+            fileMonitors.delete(fileId);
+            return;
+        }
+        
+        const stats = fs.statSync(monitor.filePath);
+        const currentModified = stats.mtime.getTime();
+        
+        if (currentModified > monitor.lastModified) {
+            console.log(`File ${fileId} has been modified, processing...`);
+            
+            // Update last modified time
+            monitor.lastModified = currentModified;
+            
+            // Create versioning and convert to PDF
+            processFileChanges(fileId, monitor.filePath);
+        }
+        
+        // Schedule next check in 0.5 seconds
+        monitor.timeout = setTimeout(() => {
+            monitorFileChanges(fileId);
+        }, 500);
+        
+    } catch (error) {
+        console.error(`Error monitoring file ${fileId}:`, error);
+        fileMonitors.delete(fileId);
+    }
+}
+
+// Function to process file changes (versioning + PDF conversion)
+async function processFileChanges(fileId, filePath) {
+    try {
+        console.log(`Processing changes for file: ${fileId}`);
+        
+        // Create version backup
+        await createFileVersion(fileId, filePath);
+        
+        // Convert to PDF using OnlyOffice
+        await convertToPDF(fileId, filePath);
+        
+        console.log(`Successfully processed changes for file: ${fileId}`);
+        
+    } catch (error) {
+        console.error(`Error processing file changes for ${fileId}:`, error);
+    }
+}
+
+// Function to create file version backup
+async function createFileVersion(fileId, filePath) {
+    try {
+        const fileExt = path.extname(fileId);
+        const fileNameWithoutExt = path.basename(fileId, fileExt);
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const versionFileName = `${fileNameWithoutExt}_v${versionCounter++}_${timestamp}${fileExt}`;
+        const versionPath = path.join(uploadsDir, versionFileName);
+        
+        // Copy current file to version backup
+        fs.copyFileSync(filePath, versionPath);
+        
+        console.log(`Created version backup: ${versionFileName}`);
+        
+    } catch (error) {
+        console.error('Error creating file version:', error);
+        throw error;
+    }
+}
+
+// Function to convert document to PDF using OnlyOffice
+async function convertToPDF(fileId, filePath) {
+    try {
+        const fileExt = path.extname(fileId).toLowerCase();
+        
+        // Only convert document types that OnlyOffice can handle
+        if (!['.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt'].includes(fileExt)) {
+            console.log(`Skipping PDF conversion for file type: ${fileExt}`);
+            return;
+        }
+        
+        const fileUrl = `http://host.docker.internal:${PORT}/uploads/${fileId}`;
+        const outputFileName = path.basename(fileId, fileExt) + '.pdf';
+        const outputPath = path.join(uploadsDir, outputFileName);
+        
+        // OnlyOffice Document Server conversion API
+        const conversionRequest = {
+            async: false,
+            filetype: fileExt.substring(1), // Remove the dot
+            key: crypto.createHash('md5').update(fileId + Date.now()).digest('hex'),
+            outputtype: 'pdf',
+            title: fileId,
+            url: fileUrl
+        };
+        
+        // Add JWT token if needed
+        const token = generateJWT(conversionRequest);
+        
+        console.log('Starting PDF conversion for:', fileId);
+        
+        const response = await axios.post(`http://localhost:8888/ConvertService.ashx`, conversionRequest, {
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+            },
+            timeout: 30000
+        });
+        
+        if (response.data && response.data.endConvert && response.data.fileUrl) {
+            // Download the converted PDF
+            const pdfResponse = await axios.get(response.data.fileUrl, {
+                responseType: 'stream',
+                timeout: 30000
+            });
+            
+            const writeStream = fs.createWriteStream(outputPath);
+            pdfResponse.data.pipe(writeStream);
+            
+            await new Promise((resolve, reject) => {
+                writeStream.on('finish', resolve);
+                writeStream.on('error', reject);
+            });
+            
+            console.log(`PDF conversion completed: ${outputFileName}`);
+            
+        } else {
+            console.error('PDF conversion failed:', response.data);
+        }
+        
+    } catch (error) {
+        console.error('Error converting to PDF:', error);
+        // Don't throw error to avoid stopping the monitoring process
+    }
+}
+
+// Function to stop monitoring a file
+function stopFileMonitoring(fileId) {
+    const monitor = fileMonitors.get(fileId);
+    if (monitor) {
+        monitor.isMonitoring = false;
+        if (monitor.timeout) {
+            clearTimeout(monitor.timeout);
+        }
+        fileMonitors.delete(fileId);
+        console.log(`Stopped monitoring file: ${fileId}`);
+    }
+}
 
 // Helper function to determine document type for OnlyOffice
 function getDocumentType(extension) {
@@ -335,7 +557,86 @@ setInterval(() => {
             requestCache.delete(key);
         }
     }
+    
+    // Clean up file monitors that have been inactive for more than 10 minutes
+    for (const [fileId, monitor] of fileMonitors.entries()) {
+        if (monitor.lastModified && (now - monitor.lastModified > 10 * 60 * 1000)) {
+            console.log(`Cleaning up inactive monitor for file: ${fileId}`);
+            stopFileMonitoring(fileId);
+        }
+    }
 }, 60000); // Clean every minute
+
+// API to stop monitoring a specific file
+app.post('/api/stop-monitoring/:id', (req, res) => {
+    const fileId = req.params.id;
+    
+    console.log('Stop monitoring request for:', fileId);
+    
+    if (fileMonitors.has(fileId)) {
+        stopFileMonitoring(fileId);
+        res.json({ success: true, message: `Monitoring stopped for file: ${fileId}` });
+    } else {
+        res.json({ success: true, message: `No active monitoring found for file: ${fileId}` });
+    }
+});
+
+// API to get monitoring status
+app.get('/api/monitoring-status', (req, res) => {
+    const monitoringStatus = [];
+    
+    for (const [fileId, monitor] of fileMonitors.entries()) {
+        monitoringStatus.push({
+            fileId: fileId,
+            isMonitoring: monitor.isMonitoring,
+            lastModified: new Date(monitor.lastModified).toISOString(),
+            filePath: monitor.filePath
+        });
+    }
+    
+    res.json({
+        success: true,
+        activeMonitors: monitoringStatus.length,
+        monitors: monitoringStatus
+    });
+});
+
+// API to get file versions
+app.get('/api/file-versions/:id', (req, res) => {
+    const fileId = req.params.id;
+    const fileExt = path.extname(fileId);
+    const fileNameWithoutExt = path.basename(fileId, fileExt);
+    
+    try {
+        if (!fs.existsSync(uploadsDir)) {
+            return res.json({ success: true, versions: [] });
+        }
+
+        const versions = fs.readdirSync(uploadsDir)
+            .filter(filename => {
+                return filename.startsWith(fileNameWithoutExt + '_v') && filename.endsWith(fileExt);
+            })
+            .map(filename => {
+                const filePath = path.join(uploadsDir, filename);
+                const stats = fs.statSync(filePath);
+                
+                return {
+                    filename: filename,
+                    size: stats.size,
+                    url: `http://localhost:${PORT}/uploads/${filename}`,
+                    createdDate: stats.birthtime.toISOString(),
+                    modifiedDate: stats.mtime.toISOString()
+                };
+            })
+            .sort((a, b) => new Date(b.createdDate) - new Date(a.createdDate));
+        
+        console.log(`Found ${versions.length} versions for file: ${fileId}`);
+        res.json({ success: true, versions });
+    } catch (error) {
+        console.error('Error getting file versions:', error);
+        res.status(500).json({ error: 'Failed to get file versions' });
+    }
+});
 
 // Error handling middleware
 app.use((err, req, res, next) => {
