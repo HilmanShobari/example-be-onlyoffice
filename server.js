@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const axios = require('axios');
+const { v4: uuidv4 } = require('uuid');
 
 const app = express();
 const PORT = 3001;
@@ -17,7 +18,6 @@ const MAX_REQUESTS_PER_WINDOW = 5;
 
 // File monitoring storage
 const fileMonitors = new Map(); // fileId -> { timeout, lastModified, isMonitoring }
-let versionCounter = 1;
 
 // CORS configuration
 const corsOptions = {
@@ -226,7 +226,7 @@ app.get('/api/file/:id', rateLimit, (req, res) => {
 });
 
 // OnlyOffice callback untuk menyimpan perubahan
-app.post('/api/callback/:id', (req, res) => {
+app.post('/api/callback/:id', async (req, res) => {
     const fileId = req.params.id;
     const body = req.body;
     
@@ -242,23 +242,49 @@ app.post('/api/callback/:id', (req, res) => {
         
         console.log('Saving document from:', downloadUrl, 'to:', filePath);
         
-        // Download file dari OnlyOffice dan simpan
-        const https = require('https');
-        const http = require('http');
-        const client = downloadUrl.startsWith('https') ? https : http;
-        
-        const file = fs.createWriteStream(filePath);
-        client.get(downloadUrl, (response) => {
-            response.pipe(file);
-            file.on('finish', () => {
-                file.close();
-                console.log(`File ${fileId} saved successfully`);
-                // Invalidate cache when file is updated
-                configCache.delete(fileId);
+        try {
+            // CREATE VERSION BACKUP BEFORE OVERWRITING
+            if (fs.existsSync(filePath)) {
+                console.log('Creating version backup before saving new version...');
+                const versionFileName = await createFileVersionFromCallback(fileId, filePath);
+                // Track the relationship
+                addFileRelationship(fileId, versionFileName, 'version');
+            }
+            
+            // Download file dari OnlyOffice dan simpan
+            const https = require('https');
+            const http = require('http');
+            const client = downloadUrl.startsWith('https') ? https : http;
+            
+            const file = fs.createWriteStream(filePath);
+            client.get(downloadUrl, (response) => {
+                response.pipe(file);
+                file.on('finish', () => {
+                    file.close();
+                    console.log(`File ${fileId} saved successfully`);
+                    // Invalidate cache when file is updated
+                    configCache.delete(fileId);
+                    
+                    // Convert new version to PDF after saving
+                    setTimeout(async () => {
+                        try {
+                            const pdfFileName = await convertToPDF(fileId, filePath);
+                            if (pdfFileName) {
+                                // Track the PDF relationship
+                                addFileRelationship(fileId, pdfFileName, 'pdf');
+                            }
+                        } catch (err) {
+                            console.error('PDF conversion error:', err);
+                        }
+                    }, 1000); // Wait 1 second to ensure file is fully written
+                });
+            }).on('error', (err) => {
+                console.error('Error downloading file:', err);
             });
-        }).on('error', (err) => {
-            console.error('Error downloading file:', err);
-        });
+            
+        } catch (error) {
+            console.error('Error in callback processing:', error);
+        }
     }
     
     res.json({ error: 0 });
@@ -306,8 +332,35 @@ app.delete('/api/file/:id', (req, res) => {
         fs.unlinkSync(filePath);
         // Clear cache when file is deleted
         configCache.delete(fileId);
-        console.log('File deleted successfully:', fileId);
-        res.json({ success: true, message: 'File deleted successfully' });
+        
+        // Clean up file relationships
+        if (fileRelationships.has(fileId)) {
+            const relationship = fileRelationships.get(fileId);
+            
+            // Delete version files
+            relationship.versions.forEach(versionInfo => {
+                const versionPath = path.join(uploadsDir, versionInfo.id);
+                if (fs.existsSync(versionPath)) {
+                    fs.unlinkSync(versionPath);
+                    console.log('Deleted version file:', versionInfo.id);
+                }
+            });
+            
+            // Delete PDF files
+            relationship.pdfs.forEach(pdfInfo => {
+                const pdfPath = path.join(uploadsDir, pdfInfo.id);
+                if (fs.existsSync(pdfPath)) {
+                    fs.unlinkSync(pdfPath);
+                    console.log('Deleted PDF file:', pdfInfo.id);
+                }
+            });
+            
+            // Remove from relationships map
+            fileRelationships.delete(fileId);
+        }
+        
+        console.log('File and related versions/PDFs deleted successfully:', fileId);
+        res.json({ success: true, message: 'File and related versions deleted successfully' });
     } else {
         res.status(404).json({ error: 'File not found' });
     }
@@ -411,16 +464,14 @@ function monitorFileChanges(fileId) {
     }
 }
 
-// Function to process file changes (versioning + PDF conversion)
+// Function to process file changes (monitoring only - versioning handled in callback)
 async function processFileChanges(fileId, filePath) {
     try {
         console.log(`Processing changes for file: ${fileId}`);
         
-        // Create version backup
-        await createFileVersion(fileId, filePath);
-        
-        // Convert to PDF using OnlyOffice
-        await convertToPDF(fileId, filePath);
+        // Note: Versioning is now handled in OnlyOffice callback
+        // PDF conversion is also handled in callback to avoid duplication
+        console.log(`File change detected for: ${fileId} - PDF conversion handled by callback`);
         
         console.log(`Successfully processed changes for file: ${fileId}`);
         
@@ -433,18 +484,36 @@ async function processFileChanges(fileId, filePath) {
 async function createFileVersion(fileId, filePath) {
     try {
         const fileExt = path.extname(fileId);
-        const fileNameWithoutExt = path.basename(fileId, fileExt);
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-        const versionFileName = `${fileNameWithoutExt}_v${versionCounter++}_${timestamp}${fileExt}`;
+        const versionFileName = `${uuidv4()}${fileExt}`;
         const versionPath = path.join(uploadsDir, versionFileName);
         
         // Copy current file to version backup
         fs.copyFileSync(filePath, versionPath);
         
         console.log(`Created version backup: ${versionFileName}`);
+        return versionFileName;
         
     } catch (error) {
         console.error('Error creating file version:', error);
+        throw error;
+    }
+}
+
+// Function to create file version backup specifically for callback
+async function createFileVersionFromCallback(fileId, filePath) {
+    try {
+        const fileExt = path.extname(fileId);
+        const versionFileName = `${uuidv4()}${fileExt}`;
+        const versionPath = path.join(uploadsDir, versionFileName);
+        
+        // Copy current file to version backup
+        fs.copyFileSync(filePath, versionPath);
+        
+        console.log(`Created callback version backup: ${versionFileName}`);
+        return versionFileName;
+        
+    } catch (error) {
+        console.error('Error creating callback file version:', error);
         throw error;
     }
 }
@@ -461,7 +530,8 @@ async function convertToPDF(fileId, filePath) {
         }
         
         const fileUrl = `http://host.docker.internal:${PORT}/uploads/${fileId}`;
-        const outputFileName = path.basename(fileId, fileExt) + '.pdf';
+        // Generate unique PDF filename with UUID
+        const outputFileName = `${uuidv4()}.pdf`;
         const outputPath = path.join(uploadsDir, outputFileName);
         
         // OnlyOffice Document Server conversion API
@@ -477,7 +547,7 @@ async function convertToPDF(fileId, filePath) {
         // Add JWT token if needed
         const token = generateJWT(conversionRequest);
         
-        console.log('Starting PDF conversion for:', fileId);
+        console.log('Starting PDF conversion for:', fileId, '-> PDF:', outputFileName);
         
         const response = await axios.post(`http://localhost:8888/ConvertService.ashx`, conversionRequest, {
             headers: {
@@ -503,6 +573,7 @@ async function convertToPDF(fileId, filePath) {
             });
             
             console.log(`PDF conversion completed: ${outputFileName}`);
+            return outputFileName;
             
         } else {
             console.error('PDF conversion failed:', response.data);
@@ -601,37 +672,92 @@ app.get('/api/monitoring-status', (req, res) => {
     });
 });
 
-// API to get file versions
+// Store file relationships for tracking versions and PDFs
+const fileRelationships = new Map(); // originalFileId -> { versions: [], pdfs: [] }
+
+// Helper function to add file relationship
+function addFileRelationship(originalFileId, relatedFileId, type) {
+    if (!fileRelationships.has(originalFileId)) {
+        fileRelationships.set(originalFileId, { versions: [], pdfs: [] });
+    }
+    
+    const relationship = fileRelationships.get(originalFileId);
+    if (type === 'version') {
+        relationship.versions.push({
+            id: relatedFileId,
+            createdAt: new Date().toISOString()
+        });
+    } else if (type === 'pdf') {
+        relationship.pdfs.push({
+            id: relatedFileId,
+            createdAt: new Date().toISOString()
+        });
+    }
+}
+
+// API to get file versions using relationship tracking
 app.get('/api/file-versions/:id', (req, res) => {
     const fileId = req.params.id;
-    const fileExt = path.extname(fileId);
-    const fileNameWithoutExt = path.basename(fileId, fileExt);
     
     try {
         if (!fs.existsSync(uploadsDir)) {
-            return res.json({ success: true, versions: [] });
+            return res.json({ success: true, versions: [], pdfs: [] });
         }
 
-        const versions = fs.readdirSync(uploadsDir)
-            .filter(filename => {
-                return filename.startsWith(fileNameWithoutExt + '_v') && filename.endsWith(fileExt);
+        const relationship = fileRelationships.get(fileId) || { versions: [], pdfs: [] };
+        
+        // Get version files data
+        const versions = relationship.versions
+            .filter(versionInfo => {
+                const filePath = path.join(uploadsDir, versionInfo.id);
+                return fs.existsSync(filePath);
             })
-            .map(filename => {
-                const filePath = path.join(uploadsDir, filename);
+            .map(versionInfo => {
+                const filePath = path.join(uploadsDir, versionInfo.id);
                 const stats = fs.statSync(filePath);
                 
                 return {
-                    filename: filename,
+                    id: versionInfo.id,
+                    filename: versionInfo.id,
                     size: stats.size,
-                    url: `http://localhost:${PORT}/uploads/${filename}`,
-                    createdDate: stats.birthtime.toISOString(),
-                    modifiedDate: stats.mtime.toISOString()
+                    url: `http://localhost:${PORT}/uploads/${versionInfo.id}`,
+                    createdDate: versionInfo.createdAt,
+                    modifiedDate: stats.mtime.toISOString(),
+                    type: 'version'
                 };
             })
             .sort((a, b) => new Date(b.createdDate) - new Date(a.createdDate));
         
-        console.log(`Found ${versions.length} versions for file: ${fileId}`);
-        res.json({ success: true, versions });
+        // Get PDF files data
+        const pdfs = relationship.pdfs
+            .filter(pdfInfo => {
+                const filePath = path.join(uploadsDir, pdfInfo.id);
+                return fs.existsSync(filePath);
+            })
+            .map(pdfInfo => {
+                const filePath = path.join(uploadsDir, pdfInfo.id);
+                const stats = fs.statSync(filePath);
+                
+                return {
+                    id: pdfInfo.id,
+                    filename: pdfInfo.id,
+                    size: stats.size,
+                    url: `http://localhost:${PORT}/uploads/${pdfInfo.id}`,
+                    createdDate: pdfInfo.createdAt,
+                    modifiedDate: stats.mtime.toISOString(),
+                    type: 'pdf'
+                };
+            })
+            .sort((a, b) => new Date(b.createdDate) - new Date(a.createdDate));
+        
+        console.log(`Found ${versions.length} versions and ${pdfs.length} PDFs for file: ${fileId}`);
+        res.json({ 
+            success: true, 
+            originalFile: fileId,
+            versions: versions,
+            pdfs: pdfs,
+            total: versions.length + pdfs.length
+        });
     } catch (error) {
         console.error('Error getting file versions:', error);
         res.status(500).json({ error: 'Failed to get file versions' });
