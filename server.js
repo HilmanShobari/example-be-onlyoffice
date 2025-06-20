@@ -127,8 +127,8 @@ function generateJWT(payload) {
     return `${header}.${payloadBase64}.${signature}`;
 }
 
-// Upload file
-app.post('/api/upload', upload.single('document'), (req, res) => {
+// Upload file with automatic PDF conversion
+app.post('/api/upload', upload.single('document'), async (req, res) => {
     if (!req.file) {
         return res.status(400).json({ error: 'No file uploaded' });
     }
@@ -144,11 +144,60 @@ app.post('/api/upload', upload.single('document'), (req, res) => {
 
     console.log('File uploaded:', fileInfo);
 
-    res.json({
+    // Check if file can be converted to PDF
+    const fileExt = path.extname(req.file.filename).toLowerCase();
+    const canConvertToPDF = ['.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt'].includes(fileExt);
+    
+    let pdfInfo = null;
+    
+    if (canConvertToPDF) {
+        try {
+            console.log('Starting automatic PDF conversion for uploaded file:', req.file.filename);
+            
+            // Wait a moment to ensure file is fully written
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
+            const pdfFileName = await convertToPDF(req.file.filename, req.file.path);
+            
+            if (pdfFileName) {
+                // Track the PDF relationship
+                addFileRelationship(req.file.filename, pdfFileName, 'pdf');
+                
+                const pdfPath = path.join(uploadsDir, pdfFileName);
+                const pdfStats = fs.statSync(pdfPath);
+                
+                pdfInfo = {
+                    id: pdfFileName,
+                    filename: pdfFileName,
+                    size: pdfStats.size,
+                    url: `http://localhost:${PORT}/uploads/${pdfFileName}`,
+                    createdDate: new Date().toISOString(),
+                    type: 'pdf'
+                };
+                
+                console.log('PDF conversion completed for upload:', pdfFileName);
+            }
+        } catch (error) {
+            console.error('Error during automatic PDF conversion:', error);
+            // Don't fail the upload if PDF conversion fails
+        }
+    }
+
+    const response = {
         success: true,
         message: 'File uploaded successfully',
-        file: fileInfo
-    });
+        file: fileInfo,
+        pdf: pdfInfo,
+        canConvertToPDF: canConvertToPDF
+    };
+
+    if (pdfInfo) {
+        response.message += ' and converted to PDF';
+    } else if (canConvertToPDF) {
+        response.message += ' (PDF conversion failed)';
+    }
+
+    res.json(response);
 });
 
 // Get file info for OnlyOffice with rate limiting and caching
