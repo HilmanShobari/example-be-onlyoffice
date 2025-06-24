@@ -9,6 +9,7 @@ const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
 
 const app = express();
+const serverless = require('serverless-http');
 
 // Configuration from environment variables
 const PORT = process.env.PORT || 3001;
@@ -848,3 +849,5 @@ app.listen(PORT, () => {
     console.log(`OnlyOffice Document Server URL: ${DOCUMENT_SERVER_URL}`);
     console.log(`Uploads directory: ${uploadsDir}`);
 }); 
+
+module.exports.handler = serverless(app);
