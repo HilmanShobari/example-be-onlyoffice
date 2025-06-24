@@ -236,7 +236,7 @@ app.get('/api/file/:id', rateLimit, (req, res) => {
     }
 
     const stats = fs.statSync(filePath);
-    const fileUrl = `https://a38c-36-84-233-118.ngrok-free.app/uploads/${fileId}`;
+    const fileUrl = `${BACKEND_URL}/uploads/${fileId}`;
     
     // Generate unique key for OnlyOffice
     const documentKey = crypto.createHash('md5').update(fileId + stats.mtime.getTime()).digest('hex');
@@ -255,7 +255,7 @@ app.get('/api/file/:id', rateLimit, (req, res) => {
         editorConfig: {
             mode: 'edit', // 'edit' atau 'view'
             lang: 'id',
-            callbackUrl: `https://a38c-36-84-233-118.ngrok-free.app/api/callback/${fileId}`,
+            callbackUrl: `${BACKEND_URL}/api/callback/${fileId}`,
             user: {
                 id: 'user-1',
                 name: 'User'
@@ -589,7 +589,7 @@ async function convertToPDF(fileId, filePath) {
             return;
         }
         
-        const fileUrl = `https://a38c-36-84-233-118.ngrok-free.app/uploads/${fileId}`;
+        const fileUrl = `${BACKEND_URL}/uploads/${fileId}`;
         // Generate unique PDF filename with UUID
         const outputFileName = `${uuidv4()}.pdf`;
         const outputPath = path.join(uploadsDir, outputFileName);
