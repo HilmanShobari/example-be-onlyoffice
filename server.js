@@ -7,19 +7,14 @@ const fs = require('fs');
 const crypto = require('crypto');
 const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
+const serverless = require('serverless-http');
 
 const app = express();
-const serverless = require('serverless-http');
 
 // Configuration from environment variables
 const PORT = process.env.PORT || 3001;
 const ONLYOFFICE_URL = process.env.ONLYOFFICE_URL || 'https://staging-onlyoffice.frackment.id';
-const BACKEND_URL = process.env.BACKEND_URL || 'https://a38c-36-84-233-118.ngrok-free.app';
-
-// OnlyOffice JWT Secret - PENTING: Ganti dengan secret yang benar dari server OnlyOffice!
-// Untuk mendapatkan secret yang benar, jalankan di VM OnlyOffice:
-// sudo docker exec 01ca83ae75bb /var/www/onlyoffice/documentserver/npm/json -f /etc/onlyoffice/documentserver/local.json 'services.CoAuthoring.secret.session.string'
-// const ONLYOFFICE_JWT_SECRET = process.env.ONLYOFFICE_JWT_SECRET || 'secret';
+const BACKEND_URL = process.env.BACKEND_URL || 'https://your-vercel-app-url.vercel.app';
 const ONLYOFFICE_JWT_SECRET = process.env.ONLYOFFICE_JWT_SECRET || 'Q2XYeDYz0skKN5xoOYX87rm5BK2l0R61';
 
 console.log('🔧 Starting OnlyOffice Backend Server...');
@@ -36,9 +31,9 @@ const MAX_REQUESTS_PER_WINDOW = 5;
 // File monitoring storage
 const fileMonitors = new Map(); // fileId -> { timeout, lastModified, isMonitoring }
 
-// CORS configuration
+// CORS configuration for Vercel
 const corsOptions = {
-    origin: "*",
+    origin: '*',
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     credentials: true,
     optionsSuccessStatus: 200,
@@ -90,8 +85,8 @@ const rateLimit = (req, res, next) => {
     next();
 };
 
-// Create uploads directory if it doesn't exist
-const uploadsDir = path.join(__dirname, 'uploads');
+// Create uploads directory if it doesn't exist (for local development)
+const uploadsDir = process.env.VERCEL ? '/tmp/uploads' : path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) {
     fs.mkdirSync(uploadsDir, { recursive: true });
 }
@@ -115,7 +110,6 @@ const upload = multer({
         fileSize: 50 * 1024 * 1024 // 50MB limit
     },
     fileFilter: (req, file, cb) => {
-        // Accept common document formats
         const allowedTypes = ['.docx', '.xlsx', '.pptx', '.doc', '.xls', '.ppt', '.pdf', '.txt'];
         const fileExt = path.extname(file.originalname).toLowerCase();
         if (allowedTypes.includes(fileExt)) {
@@ -844,10 +838,15 @@ app.use((req, res) => {
     res.status(404).json({ error: 'Endpoint not found' });
 });
 
-app.listen(PORT, () => {
-    console.log(`Server running on ${BACKEND_URL}`);
-    console.log(`OnlyOffice Document Server URL: ${DOCUMENT_SERVER_URL}`);
-    console.log(`Uploads directory: ${uploadsDir}`);
-}); 
+// Start server for local development
+if (!process.env.VERCEL) {
+    app.listen(PORT, () => {
+        console.log(`Server running on ${BACKEND_URL}`);
+        console.log(`OnlyOffice Document Server URL: ${ONLYOFFICE_URL}`);
+        console.log(`Uploads directory: ${uploadsDir}`);
+    });
+}
 
+// Export for Vercel
+module.exports = app;
 module.exports.handler = serverless(app);
