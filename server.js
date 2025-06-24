@@ -14,7 +14,7 @@ const app = express();
 // Configuration from environment variables
 const PORT = process.env.PORT || 3001;
 const ONLYOFFICE_URL = process.env.ONLYOFFICE_URL || 'https://staging-onlyoffice.frackment.id';
-const BACKEND_URL = process.env.BACKEND_URL || 'https://your-vercel-app-url.vercel.app';
+const BACKEND_URL = process.env.BACKEND_URL || 'https://example-be-onlyoffice.vercel.app/';
 const ONLYOFFICE_JWT_SECRET = process.env.ONLYOFFICE_JWT_SECRET || 'Q2XYeDYz0skKN5xoOYX87rm5BK2l0R61';
 
 console.log('🔧 Starting OnlyOffice Backend Server...');
