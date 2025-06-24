@@ -22,7 +22,7 @@
   ],
   "env": {
     "ONLYOFFICE_URL": "https://staging-onlyoffice.frackment.id",
-    "BACKEND_URL": "https://your-vercel-app-url.vercel.app",
+    "BACKEND_URL": "https://example-be-onlyoffice.vercel.app",
     "ONLYOFFICE_JWT_SECRET": "Q2XYeDYz0skKN5xoOYX87rm5BK2l0R61"
   }
 }
