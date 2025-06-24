@@ -37,15 +37,7 @@ const fileMonitors = new Map(); // fileId -> { timeout, lastModified, isMonitori
 
 // CORS configuration
 const corsOptions = {
-    origin: [
-        'http://localhost:3000', 
-        'http://localhost:8888', 
-        'http://43.157.209.142', 
-        'https://staging-onlyoffice.frackment.id', 
-        'https://a38c-36-84-233-118.ngrok-free.app', 
-        'http://localhost:3001', 
-        'https://example-fe-onlyoffice.vercel.app'
-    ],
+    origin: "*",
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     credentials: true,
     optionsSuccessStatus: 200,
