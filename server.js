@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const multer = require('multer');
 const cors = require('cors');
@@ -8,8 +9,23 @@ const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
 
 const app = express();
-const PORT = 3001;
-const ONLYOFFICE_JWT_SECRET = 'secret';
+
+// Configuration from environment variables
+const PORT = process.env.PORT || 3001;
+const ONLYOFFICE_URL = process.env.ONLYOFFICE_URL || 'https://staging-onlyoffice.frackment.id';
+const BACKEND_URL = process.env.BACKEND_URL || 'https://a38c-36-84-233-118.ngrok-free.app';
+
+// OnlyOffice JWT Secret - PENTING: Ganti dengan secret yang benar dari server OnlyOffice!
+// Untuk mendapatkan secret yang benar, jalankan di VM OnlyOffice:
+// sudo docker exec 01ca83ae75bb /var/www/onlyoffice/documentserver/npm/json -f /etc/onlyoffice/documentserver/local.json 'services.CoAuthoring.secret.session.string'
+// const ONLYOFFICE_JWT_SECRET = process.env.ONLYOFFICE_JWT_SECRET || 'secret';
+const ONLYOFFICE_JWT_SECRET = process.env.ONLYOFFICE_JWT_SECRET || 'Q2XYeDYz0skKN5xoOYX87rm5BK2l0R61';
+
+console.log('🔧 Starting OnlyOffice Backend Server...');
+console.log('🌐 Backend URL:', BACKEND_URL);
+console.log('📄 OnlyOffice Server:', ONLYOFFICE_URL);
+console.log('🔐 Using JWT Secret:', ONLYOFFICE_JWT_SECRET);
+console.log('⚠️  Make sure JWT secret matches your OnlyOffice server!');
 
 // Rate limiting cache for file requests
 const requestCache = new Map();
@@ -21,10 +37,19 @@ const fileMonitors = new Map(); // fileId -> { timeout, lastModified, isMonitori
 
 // CORS configuration
 const corsOptions = {
-    origin: ['http://localhost:3000', 'http://localhost:8888'],
+    origin: [
+        'http://localhost:3000', 
+        'http://localhost:8888', 
+        'http://43.157.209.142', 
+        'https://staging-onlyoffice.frackment.id', 
+        'https://a38c-36-84-233-118.ngrok-free.app', 
+        'http://localhost:3001', 
+        'https://example-fe-onlyoffice.vercel.app'
+    ],
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     credentials: true,
-    optionsSuccessStatus: 200
+    optionsSuccessStatus: 200,
+    allowedHeaders: ['Content-Type', 'Authorization', 'ngrok-skip-browser-warning']
 };
 
 // Middleware
@@ -109,7 +134,7 @@ const upload = multer({
 });
 
 // OnlyOffice Document Server URL (dari Docker container Anda)
-const DOCUMENT_SERVER_URL = 'http://localhost:8888';
+const DOCUMENT_SERVER_URL = ONLYOFFICE_URL;
 
 // File config cache to avoid repeated processing
 const configCache = new Map();
@@ -138,7 +163,7 @@ app.post('/api/upload', upload.single('document'), async (req, res) => {
         name: req.file.originalname,
         size: req.file.size,
         path: req.file.path,
-        url: `http://localhost:${PORT}/uploads/${req.file.filename}`,
+        url: `${BACKEND_URL}/uploads/${req.file.filename}`,
         uploadDate: new Date().toISOString()
     };
 
@@ -170,7 +195,7 @@ app.post('/api/upload', upload.single('document'), async (req, res) => {
                     id: pdfFileName,
                     filename: pdfFileName,
                     size: pdfStats.size,
-                    url: `http://localhost:${PORT}/uploads/${pdfFileName}`,
+                    url: `${BACKEND_URL}/uploads/${pdfFileName}`,
                     createdDate: new Date().toISOString(),
                     type: 'pdf'
                 };
@@ -224,7 +249,7 @@ app.get('/api/file/:id', rateLimit, (req, res) => {
     }
 
     const stats = fs.statSync(filePath);
-    const fileUrl = `http://host.docker.internal:${PORT}/uploads/${fileId}`;
+    const fileUrl = `https://a38c-36-84-233-118.ngrok-free.app/uploads/${fileId}`;
     
     // Generate unique key for OnlyOffice
     const documentKey = crypto.createHash('md5').update(fileId + stats.mtime.getTime()).digest('hex');
@@ -243,7 +268,7 @@ app.get('/api/file/:id', rateLimit, (req, res) => {
         editorConfig: {
             mode: 'edit', // 'edit' atau 'view'
             lang: 'id',
-            callbackUrl: `http://host.docker.internal:${PORT}/api/callback/${fileId}`,
+            callbackUrl: `https://a38c-36-84-233-118.ngrok-free.app/api/callback/${fileId}`,
             user: {
                 id: 'user-1',
                 name: 'User'
@@ -353,7 +378,7 @@ app.get('/api/files', (req, res) => {
                 id: filename,
                 name: filename,
                 size: stats.size,
-                url: `http://localhost:${PORT}/uploads/${filename}`,
+                url: `${BACKEND_URL}/api/files/uploads/${filename}`,
                 uploadDate: stats.birthtime.toISOString()
             };
         });
@@ -577,7 +602,7 @@ async function convertToPDF(fileId, filePath) {
             return;
         }
         
-        const fileUrl = `http://host.docker.internal:${PORT}/uploads/${fileId}`;
+        const fileUrl = `https://a38c-36-84-233-118.ngrok-free.app/uploads/${fileId}`;
         // Generate unique PDF filename with UUID
         const outputFileName = `${uuidv4()}.pdf`;
         const outputPath = path.join(uploadsDir, outputFileName);
@@ -597,7 +622,7 @@ async function convertToPDF(fileId, filePath) {
         
         console.log('Starting PDF conversion for:', fileId, '-> PDF:', outputFileName);
         
-        const response = await axios.post(`http://localhost:8888/ConvertService.ashx`, conversionRequest, {
+        const response = await axios.post(`${ONLYOFFICE_URL}/ConvertService.ashx`, conversionRequest, {
             headers: {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${token}`
@@ -768,7 +793,7 @@ app.get('/api/file-versions/:id', (req, res) => {
                     id: versionInfo.id,
                     filename: versionInfo.id,
                     size: stats.size,
-                    url: `http://localhost:${PORT}/uploads/${versionInfo.id}`,
+                    url: `${BACKEND_URL}/uploads/${versionInfo.id}`,
                     createdDate: versionInfo.createdAt,
                     modifiedDate: stats.mtime.toISOString(),
                     type: 'version'
@@ -790,7 +815,7 @@ app.get('/api/file-versions/:id', (req, res) => {
                     id: pdfInfo.id,
                     filename: pdfInfo.id,
                     size: stats.size,
-                    url: `http://localhost:${PORT}/uploads/${pdfInfo.id}`,
+                    url: `${BACKEND_URL}/uploads/${pdfInfo.id}`,
                     createdDate: pdfInfo.createdAt,
                     modifiedDate: stats.mtime.toISOString(),
                     type: 'pdf'
@@ -827,7 +852,7 @@ app.use((req, res) => {
 });
 
 app.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`Server running on ${BACKEND_URL}`);
     console.log(`OnlyOffice Document Server URL: ${DOCUMENT_SERVER_URL}`);
     console.log(`Uploads directory: ${uploadsDir}`);
 }); 
