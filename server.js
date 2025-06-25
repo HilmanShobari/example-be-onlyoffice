@@ -313,8 +313,7 @@ app.post('/api/callback/:id', async (req, res) => {
             
             // Download file dari OnlyOffice dan simpan
             const https = require('https');
-            const http = require('http');
-            const client = downloadUrl.startsWith('https') ? https : http;
+            const client = https;
             
             const file = fs.createWriteStream(filePath);
             client.get(downloadUrl, (response) => {
