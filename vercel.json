@@ -21,8 +21,8 @@
     }
   ],
   "env": {
-    "ONLYOFFICE_URL": "https://staging-onlyoffice.frackment.id",
+    "ONLYOFFICE_URL": "http://192.168.30.91:8888",
     "BACKEND_URL": "https://example-be-onlyoffice.vercel.app",
-    "ONLYOFFICE_JWT_SECRET": "Q2XYeDYz0skKN5xoOYX87rm5BK2l0R61"
+    "ONLYOFFICE_JWT_SECRET": "dWNyZXJlaW5kbzI1"
   }
 }
