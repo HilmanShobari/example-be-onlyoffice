@@ -14,7 +14,7 @@ const app = express();
 // Configuration from environment variables
 const PORT = process.env.PORT || 3001;
 const ONLYOFFICE_URL = process.env.ONLYOFFICE_URL || 'http://192.168.30.91:8888';
-const BACKEND_URL = process.env.BACKEND_URL || 'https://example-be-onlyoffice.vercel.app';
+const BACKEND_URL = process.env.BACKEND_URL || 'https://6be42ce97a5c.ngrok-free.app';
 const ONLYOFFICE_JWT_SECRET = process.env.ONLYOFFICE_JWT_SECRET || 'dWNyZXJlaW5kbzI1';
 
 console.log('🔧 Starting OnlyOffice Backend Server...');
@@ -310,10 +310,11 @@ app.post('/api/callback/:id', async (req, res) => {
                 // Track the relationship
                 addFileRelationship(fileId, versionFileName, 'version');
             }
-            
+          
             // Download file dari OnlyOffice dan simpan
-            const https = require('https');
-            const client = https;
+            // its okay if client is http
+            const http = require('http');
+            const client = http;
             
             const file = fs.createWriteStream(filePath);
             client.get(downloadUrl, (response) => {
